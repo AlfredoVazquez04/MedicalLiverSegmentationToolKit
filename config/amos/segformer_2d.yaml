@@ -1,0 +1,58 @@
+ # DATA
+classes: 16
+modality: CT
+
+# MODEL
+arch: segformer        # Nombre clave para tu 'factory'
+in_chan: 1             # Escala de grises (CT)
+base_chan: 64        # (Opcional) Coincide con el embed_dim del B1, pero el código ya lo tiene fijo.
+                       # Los params de convolución (kernel, stride) se borran porque SegFormer usa Patches.
+
+# TRAIN
+epochs: 100
+roi_size: [512, 512]   # Importante: SegFormer necesita tamaños consistentes (múltiplos de 32)
+batch_size: 16        
+start_epoch: 0
+num_workers: 8         # Aumentado un poco si tienes RAM, carga más rápido
+aug_device: 'cpu'
+
+split_seed: 0
+k_fold: 5
+
+optimizer: adamw
+base_lr: 0.00006       # OJO: Los Transformers son más sensibles. 1e-3 (0.001) suele ser muy alto.
+                       # Recomiendo bajar a 6e-5 o 1e-4 para evitar que la loss explote al inicio.
+betas: [0.9, 0.999]
+weight_decay: 0.01     # SegFormer se beneficia de un weight decay un poco menor que CNNs
+weight: [0.5, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] 
+rlt: 1
+
+# AUGMENTATION
+scale: [0.8, 1.2]           
+rotate: 15             # Rotaciones más suaves suelen ir mejor en Transformers al principio
+translate: [0.1, 0.1]    
+gaussian_noise_std: 0.02
+additive_brightness_std: 0.7 
+gamma_range: [0.5, 1.6]
+
+print_freq: 10
+iter_per_epoch: 200      
+
+# VALIDATION
+ema: True
+ema_alpha: 0.99
+val_freq: 10
+
+# INFERENCE
+sliding_window: False    # SegFormer tiene atención global, a veces funciona mejor sin ventana deslizante
+window_size: [512, 512]  
+
+# DDP (Distributed Data Parallel)
+world_size: 1
+proc_idx: 0
+rank: 0
+port: 10000
+dist_url: 'tcp://localhost:10000'
+dist_backend: "nccl"      
+multiprocessing_distributed: false
+reproduce_seed: 2023

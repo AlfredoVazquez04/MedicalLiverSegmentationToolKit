@@ -15,6 +15,7 @@ import nibabel as nib
 
 import torch
 import pytorch_lightning as pl
+from pytorch_lightning.callbacks import EarlyStopping
 
 from monai.losses import DiceCELoss
 from monai.inferers import sliding_window_inference
@@ -30,7 +31,6 @@ from monai.data import (
     decollate_batch,
     list_data_collate,
 )
-
 
 from training.dataset.utils import get_dataset
 from model.utils import get_model
@@ -91,7 +91,8 @@ class Net(pl.LightningModule):
 
         except Exception as e: 
             print(e)
-            pass
+            raise e
+            
 
 
     def forward(self, x):
@@ -103,8 +104,12 @@ class Net(pl.LightningModule):
         Returns:
             (torch.Tensor | monai.data.meta_tensor.MetaTensor): Output data from the network
         """    
-        return self._model(x)
-
+        out = self._model(x)
+        
+        if isinstance(out, list) or isinstance(out, tuple):
+            return out[-1]
+            
+        return out
 
     def configure_optimizers(self):
         """Function that configures the optimizer to be used during training.
@@ -141,7 +146,7 @@ class Net(pl.LightningModule):
             batch_size=self.batch_size
             )
         # return {"loss": loss, "log": tensorboard_logs}
-        d = {"loss": loss, "log": tensorboard_logs}
+        d = {"loss": loss.detach(), "log": tensorboard_logs}
         self.training_step_outputs.append(d)
 
         return d
@@ -184,7 +189,7 @@ class Net(pl.LightningModule):
             loss, 
             batch_size=1
             ) 
-        d = {"val_loss": loss, "val_number": len(outputs)}
+        d = {"val_loss": loss.detach(), "val_number": len(outputs)}
         self.validation_step_outputs.append(d)
 
         return d
@@ -256,7 +261,7 @@ class Net(pl.LightningModule):
             loss, 
             batch_size=1
             ) 
-        d = {"test_loss": loss, "test_number": len(outputs)}
+        d = {"test_loss": loss.detach(), "test_number": len(outputs)}
         self.test_step_outputs.append(d)
 
         return d
@@ -320,9 +325,10 @@ class MainModule:
         torch.set_float32_matmul_precision('high')
         #print_config()
         print("Number of GPUs available: {}. Device used: {}".format(num_of_gpus, device))
-        #logging.basicConfig(level=logging.INFO)
+        logging.basicConfig(level=logging.INFO)
 
-        root_dir = '.'
+        # root_dir = '.'
+        root_dir = '/mnt/lustre/scratch/nlsas/home/usc/lc/avr/models' # use this in CESGA
         log_dir = os.path.join(root_dir, 'logs', args.dataset, args.model, args.dimension)
         #log_dir = os.path.join(root_dir, 'logs_3' ) ## TODO  CHANGE 
 
@@ -330,7 +336,7 @@ class MainModule:
             self.train(args, log_dir)
 
         elif args.mode == "Test":   
-            self.test(args, log_dir, root_dir=root_dir)
+            self.test(args, log_dir, device, root_dir=root_dir)
 
         elif args.mode == "Predict":
             self.predict(args, log_dir, device, root_dir=root_dir)
@@ -361,29 +367,39 @@ class MainModule:
 
         logging.info(f"Creating Model")
         net = Net(args)
-
-        if args.trainmode == 'cont':
-            log_dir_model = os.path.join(log_dir, 'lightning_logs', args.model)
+        ckpt_path = None
+        if args.trainmode == 'cont':    # only to continue on a checkpoint
+            log_dir_model = os.path.join(log_dir, 'lightning_logs')
             ckpt_path = get_latest_run_version_ckpt_epoch_no(lightning_logs_dir=log_dir_model)
-            net = net.load_from_checkpoint(checkpoint_path=ckpt_path)
+            # net = net.load_from_checkpoint(checkpoint_path=ckpt_path)
             print("Continue training from checkpoint: ", ckpt_path)
 
         tb_logger = pl.loggers.TensorBoardLogger(save_dir=log_dir)
         
         checkpoint_callback = pl.callbacks.ModelCheckpoint(monitor='val_loss',
                                                 filename= args.model + '-{epoch:02d}-{val_loss:.2f}',
-                                                save_top_k=1, mode='min')
+                                                save_top_k=1, mode='min', save_last=True)
 
         logging.info(f"Preparing trainer")
+
+        early_stop_callback = EarlyStopping(
+            monitor='val_loss',
+            min_delta=0.00,
+            patience=10,
+            verbose=True,
+            mode='min'
+        )
+        
         trainer = pl.Trainer(
             accelerator="gpu", 
             devices=[0],
-            max_epochs=net.max_epochs,
+            max_epochs=args.max_epochs, # Set 100 top check if the fault is caused by the args.max_epochs
             logger=tb_logger,
             enable_checkpointing=True,
             num_sanity_val_steps=1,
             log_every_n_steps= 1,
-            callbacks=[checkpoint_callback]
+            callbacks=[checkpoint_callback, early_stop_callback],
+            precision= '16-mixed'
         )
 
         logging.info(f"Preparing Dataset")
@@ -395,11 +411,13 @@ class MainModule:
         logging.info(f"Start training")
         start = datetime.now()
         print('Start training', start)
-        trainer.fit(net, dataset)
+        trainer.fit(net, dataset, ckpt_path=ckpt_path)
+        # if early_stop_callback.stopping_reason_message:    # to see the reason in file.out  
+        #     print(f"[Early Stopping Triggered] {early_stop_callback.stopping_reason_message}\n")
+
         print('Training duration:', datetime.now() - start)
         logging.info(f"Best Dice: {net.best_val_dice:.4f} in epoch {net.best_val_epoch}")
 
-        
         logging.info(f"Start evaluation")
         trainer.test(net, dataloaders=dataset)
         logging.info(f"Evaluation Done")
@@ -428,12 +446,21 @@ class MainModule:
         net = Net(args)
         log_dir = os.path.join(log_dir, 'lightning_logs')
         ckpt_path = get_latest_run_version_ckpt_epoch_no(
-            lightning_logs_dir=log_dir, 
-            run_version=args.run_version
+            lightning_logs_dir=log_dir
+            # run_version=args.run_version
             )
         ckpt_model = Net.load_from_checkpoint(checkpoint_path=ckpt_path)
-
+        dataset = get_dataset(args=args)
         ## TODO: Implement our metrics
+        trainer = pl.Trainer(
+            accelerator="gpu" if torch.cuda.is_available() else "cpu", 
+            devices=[0] if torch.cuda.is_available() else None,
+            logger=False
+        )
+        logging.info(f"Starting test evaluation...")
+        trainer.test(model=ckpt_model, datamodule=dataset)
+        
+        logging.info(f"Test Evaluation Done!")
             
 
     def predict(self, args, log_dir, device, root_dir="."):
@@ -566,10 +593,9 @@ def get_parser():
 
     parser.add_argument('--model', type=str, default='segformer', help="Network model name. Available models: unet, unetr, swin_unetr, unet++, attention_unet, resunet, medformer, vnet, segformer")
     parser.add_argument('--dimension', type=str, default='3d', help="Dimension of the model (2d or 3d)")
-    parser.add_argument('--dataset', type=str, default='btcv', help="Name of the dataset")
+    parser.add_argument('--dataset', type=str, default='btcv', help="Name of the dataset it can be amos (Abdominal Multi-Organ Segmentation)")
     parser.add_argument('--run_version', type=int, default=24, help="Version of the checkpoint for testing or predicting")
     parser.add_argument('--path_prediction', type=str, default="./results/", help="Path to save the predictions")
-
 
     parser.add_argument('--gpu', type=str, default='0')
 

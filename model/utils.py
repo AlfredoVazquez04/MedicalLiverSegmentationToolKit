@@ -229,7 +229,150 @@ def get_model(args, pretrain=False):
                 args.in_chan, 
                 args.classes, 
                 )
+        
+    elif args.dimension == '2d':
+        if args.model == 'unet':                # check it
+            from .dim2 import UNet
+            return UNet(
+                args.in_chan,
+                args.classes
+            )
+        
+        elif args.model == "segformer":         # check it
+            from .dim2 import SegFormer     
+            return SegFormer(
+                args.in_chan,
+                args.classes
+            )
 
+        
+
+        # TODO: add swin_unetr
+        elif args.model == "swin_unetr":
+            from .dim2 import SwinUNETR
+            return SwinUNETR(
+                spatial_dims=args.spatial_dims,
+                in_channels=args.in_chans,
+                out_channels=args.classes,         
+                feature_size=args.embed_dim,
+                patch_size=args.patch_size,
+                depths=args.depths,
+                num_heads=args.num_heads,
+                window_size=args.window_size,
+                dropout_path_rate=args.drop_path_rate,
+                use_checkpoint=args.use_checkpoint,
+                use_v2=False
+            )
+
+        # TODO: add unet++
+        elif args.model == "unetpp":            # completed
+            from .dim2 import BasicUNetPlusPlus
+            return BasicUNetPlusPlus(
+                spatial_dims=args.spatial_dims,
+                in_channels=args.in_chan,
+                out_channels=args.classes,
+                features=args.features,
+                dropout=args.dropout
+            )
+
+        # TODO: add unetr
+        elif args.model == "unetr":             # completed
+            from .dim2 import UNETR
+            return UNETR(
+                in_channels=args.in_chan,
+                out_channels=args.classes,
+                img_size=args.roi_size,
+                feature_size=args.feature_size,
+                hidden_size=args.hidden_size,
+                mlp_dim=args.mlp_dim,
+                num_heads=args.num_heads,
+                dropout_rate=args.dropout_rate,
+                spatial_dims=args.spatial_dims,
+                norm_name=args.norm_name
+            )
+        
+        # TODO: add attention_unet
+        elif args.model == "attention_unet":
+            from .dim2 import AttentionUnet
+            return AttentionUnet(
+                spatial_dims=args.spatial_dims,
+                in_channels=args.in_channels,
+                out_channels=args.classes,
+                channels=args.channels,
+                strides=args.strides,
+            )
+        
+        ##################################
+        # That are bleeding-edge research models.
+        # TODO: add unetr++
+        elif args.model == "unetrpp":
+            from .dim2 import UNETR_PP
+            return UNETR_PP(
+                in_channels=args.in_channels,
+                out_channels=args.out_channels,
+                feature_size=args.feature_size,
+                hidden_size=args.hidden_size,
+                num_heads=args.num_heads,
+                pos_embed=args.pos_embed,
+                norm_name=args.norm_name,
+                dropout_rate=args.dropout_rate,
+                depths=args.depths,
+                dims=args.dims,
+                conv_op=nn.Conv2d,
+                do_ds=args.do_ds
+            )
+
+        # TODO: add uxlstm
+        elif args.model == "uxlstm_bot":
+            from .dim2 import UXlstmBot
+            conv_op = nn.Conv2d if args.spatial_dims == 2 else nn.Conv3d
+            norm_op = nn.InstanceNorm2d if args.spatial_dims == 2 else nn.InstanceNorm3d
+
+            return UXlstmBot(
+                input_channels=args.in_channels,
+                n_stages=args.n_stages,
+                features_per_stage=args.features_per_stage,
+                conv_op=conv_op,
+                kernel_sizes=args.kernel_sizes,
+                strides=args.strides,
+                n_conv_per_stage=args.n_conv_per_stage,
+                num_classes=args.classes,
+                n_conv_per_stage_decoder=args.n_conv_per_stage_decoder,
+                conv_bias=True,
+                norm_op=norm_op,
+                norm_op_kwargs={'eps': 1e-5, 'affine': True},
+                nonlin=nn.LeakyReLU,
+                nonlin_kwargs={'inplace': True},
+                deep_supervision=False
+            )
+        ##################################
+
+        # TODO: add medlsam2
+        elif args.model == "medlsam":
+            pass
+        
+        # TODO: add segmamba 2d
+        elif args.model == "segmamba":
+            from .dim2 import SegMamba
+            return SegMamba(
+                in_chans=args.in_chan,             
+                out_chans=args.classes,       
+                depths=args.depths,                
+                feat_size=args.feat_size,          
+                hidden_size=args.hidden_size,     
+                norm_name=args.norm_name,          
+                spatial_dims=args.spatial_dims                 
+            )
+
+        # TODO: add nnmamba 2d
+        elif args.model == "nnmamba":
+            from .dim2 import nnMambaSeg
+            return nnMambaSeg(
+                in_ch=args.in_chan,
+                channels=args.base_chan,
+                blocks=args.blocks,
+                number_classes=args.classes
+            )
     else:
         raise ValueError('Invalid dimension, should be \'2d\' or \'3d\'')
 

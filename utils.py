@@ -124,7 +124,10 @@ def get_latest_run_version_ckpt_epoch_no(lightning_logs_dir="./logs/lightning_lo
     ckpt_filename = None
     for file in files:
         if file.endswith(".ckpt"):
-            ckpt_filename = file
+            if file == "last.ckpt":
+                continue
+            else:
+                ckpt_filename = file
 
     if ckpt_filename is not None:
         ckpt_path = os.path.join(checkpoints_dir, ckpt_filename)
