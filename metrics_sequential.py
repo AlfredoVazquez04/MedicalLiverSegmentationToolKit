@@ -16,7 +16,17 @@ from metrics.saveMetrics import SaveMetricsJson
 
 
 class SequentialMetrics:
-    models_2d = [] # TODO
+    models_2d = [
+        'unet',
+        'segformer',
+        'attention_unet',
+        'swin_unetr',
+        'unetr',
+        'unetpp',
+        'uxlstm',
+        'unetrpp'
+    ] # TODO
+
     models_3d = [
         #'attention_unet',
         'medformer', 
@@ -34,7 +44,8 @@ class SequentialMetrics:
         'vnet', 
     ]
 
-    dimensions = 3
+    # dimensions = 3
+    dimensions = 2
 
     file_name = 'metricsNew.json'
     root_path = './resultsNew/'
@@ -44,10 +55,18 @@ class SequentialMetrics:
     name_dataset = 'BTCV'
 
     all_metrics = MetricResult.metrics
-
+    
+    """
     all_classes = [ '__BKG__','Spleen','Right Kidney','Left Kideny','Gallbladder',
                 'Esophagus','Liver', 'Stomach','Aorta','IVC','Portal and Splenic Veins',
                 'Pancreas','Right adrenal gland','Left adrenal gland']
+    """
+
+    all_classes = [
+        'Background', 'Spleen', 'Right Kidney', 'Left Kidney', 'Gallbladder', 
+        'Esophagus', 'Liver', 'Stomach', 'Aorta', 'IVC', 'Pancreas', 
+        'Right Adrenal', 'Left Adrenal', 'Duodenum', 'Bladder', 'Prostate/Uterus'
+    ]
 
     def __load_from_file(self, path):
         """Function to load the data from a file.

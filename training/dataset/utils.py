@@ -15,3 +15,7 @@ def get_dataset(args, **kwargs):
         if args.dataset == "btcv":
             from .dim3.dataset_btcv import BTCVDataset
             return BTCVDataset(args)
+
+        if args.dataset == "amos":
+            from .dim3.dataset_amos import AMOSDataset
+            return AMOSDataset(args)

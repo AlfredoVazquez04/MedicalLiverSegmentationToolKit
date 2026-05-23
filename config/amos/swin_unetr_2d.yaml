@@ -8,7 +8,7 @@ spatial_dims: 2
 in_chans: 1            
 embed_dim: 96            
 window_size: [7, 7]      
-patch_size: [4, 4]      
+patch_size: [2, 2]      
 depths: [2, 2, 2, 2]     
 num_heads: [3, 6, 12, 24] 
 
@@ -25,10 +25,9 @@ use_checkpoint: False
 # TRAIN
 epochs: 150
 roi_size: [512, 512]    
-batch_size: 24          # Transformers use to much VRAM, begin with less batch size  
+batch_size: 8          # Transformers use to much VRAM, begin with less batch size  
 start_epoch: 0
-num_workers: 24      
-
+num_workers: 8
 optimizer: adamw
 base_lr: 0.0001          
 weight_decay: 0.05       

@@ -10,77 +10,76 @@ from utils import check_gpu_memory
 
 
 class SequentialTrain:
-
+    '''
     models_2d = {} # TODO
     models_3d = {
-        'attention_unet': 0, 
-        'medformer': 0, 
-        'resunet': 0, 
-        'swin_unetr': 0, 
-        'unet++': 0, 
-        'unetr': 0, 
-        'vnet': 0, 
-        'segformer': 3, 
-        }
-    
-    #models_3d = {'segformer': 23}
-    models_3d = {#'unet': 1,
-                 #'resunet': 1,
-                 #'segformer': 25,
-                 #'unet++': 0,
-                 #'unetr': 0,
-                 #'swin_unetr': 1,
-                 'attention_unet': 1,
-                 }
-
+        'segformer': 0,
+        'swin_unetr': 0,
+        'unet': 0,
+        'unetr': 0,
+        'unetpp': 0,
+        'unetrpp': 0,
+        'uxlstm': 0,
+        'attention_unet': 0
+    }
+    '''
+    config_modelos_3d = {
+        'swin_unetr':     {'batch_size': 4, 'accumulate': 6},
+        'attention_unet': {'batch_size': 4, 'accumulate': 6},
+        'unet':           {'batch_size': 8, 'accumulate': 3},
+        'unetpp':         {'batch_size': 8, 'accumulate': 3},
+        'uxlstm':         {'batch_size': 8, 'accumulate': 3},
+        'segformer':      {'batch_size': 12, 'accumulate': 2},
+        'unetr':          {'batch_size': 12, 'accumulate': 2},
+        'unetrpp':        {'batch_size': 12, 'accumulate': 2}
+    }
     
     dimensions = ['3d'] # '2d',
 
-    len_battery_test = 17
-
-    dataset = 'btcv'
+    dataset = 'amos'
     
 
     def __call__(self):
-        """Method to run the models in sequence and parallel.
-        """        
-
-        processes = []
-
+        """Method to run the models sequentially."""        
         for dimension in self.dimensions:
             if dimension == '2d':
                 models = self.models_2d
             else:
-                models = self.models_3d
+                models = self.config_modelos_3d
 
-            for model in list(models.keys()):
+            for model, config in models.items():
                 
-                gpu_memory = check_gpu_memory() # Verify GPU memory
-                while gpu_memory < 15124:  # Wait until GPU memory is available  9124
+                # Check GPU memory (Optional now, since running sequentially guarantees 
+                # the previous model released its memory, but kept for safety)
+                gpu_memory = check_gpu_memory() 
+                while gpu_memory < 14000:  
                     print("Need more GPU memory. Waiting...")
-                    time.sleep(55)  
+                    time.sleep(720)  
                     gpu_memory = check_gpu_memory()
                
-                print(f"\nTrain {model} ({dimension})...")  # Start model battery test
+                print(f"\nTrain {model} ({dimension})...")  
+                
                 try:
-                    process = Process(
-                        target=self.run_model, 
-                        args=(model, dimension, str(models[model])))
-                    process.start()
-                    processes.append(process)
+                    # Run the model sequentially. 
+                    # This will block and wait for the training to finish completely.
+                    self.run_model(
+                        model=model, 
+                        dimension=dimension, 
+                        run_version="0", 
+                        dataset=str(self.dataset),
+                        batch_size=str(config['batch_size']),
+                        accumulate=str(config['accumulate'])
+                    )
+                except Exception as e:
+                    print(f"Error training {model}: {e}")
 
-                except: pass
-
-                time.sleep(3600)  
-                
-                
-        for process in processes:
-            process.join()
+                # Optional: brief pause between models to ensure memory clears
+                time.sleep(10)  
 
         print("All models are tested")
 
     @staticmethod
-    def run_model(model, dimension, run_version):
+    def run_model(model, dimension, run_version, dataset, batch_size, accumulate):
         """Function to run the model to predict the battery test.
         When the prediction is finished, the time with more parameters are saved in a json file.
         The place for the json file is in the respective folder results.
@@ -89,15 +88,23 @@ class SequentialTrain:
             model (str): Name of the model
             dimension (str): Number of dimensions (2d or 3d)
             run_version (str): Version of the model
-        """        
+        """
+        data_path = os.path.join(os.environ['TMPDIR'], 'amos')
+
         args = [
             '--mode', 'Train',
+            '--trainmode', 'init',
             '--model', model, 
             '--dimension', dimension,
-            '--run_version', run_version,
-            '--data_dir', '../Datasets/BTCV_/',
-            ]
-        
+            '--dataset', dataset,
+            '--data_dir', data_path,
+            '--cache_rate', '0.',
+            '--max_epochs', '100',
+            '--out_channels', '16',
+            '--batch_size', batch_size,                  
+            '--accumulate_grad_batches', accumulate      
+        ]
+
         cmd = ['python3', 'train.py'] + args
 
         start_time = datetime.now()

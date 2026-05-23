@@ -7,6 +7,7 @@ import argparse
 from datetime import datetime
 from xmlrpc.client import boolean
 
+import gc
 import numpy as np
 import yaml
 
@@ -32,16 +33,7 @@ from monai.data import (
     list_data_collate,
 )
 
-from training.dataset.utils import get_dataset
 from model.utils import get_model
-from utils import (
-    save_nifti,
-    save_configure,
-    configure_logger,
-    get_latest_run_version_ckpt_epoch_no,
-    sample_stack,   
-)
-
 
 class Net(pl.LightningModule):
     """Class that defines the Lightning Module that will be used for training, validation and testing.
@@ -303,13 +295,117 @@ class Net(pl.LightningModule):
 
         return {"log": tensorboard_logs}
 
+def simular_consumo_real_gb(net, device, roi_size=(96, 96, 96), in_channels=1, batch_size=1):
+    """
+    Simula un step de entrenamiento para medir el pico real de memoria VRAM.
+    """
+    # 1. Asegurar que la GPU está limpia y resetear el contador de picos
+    torch.cuda.empty_cache()
+    gc.collect()
+    torch.cuda.reset_peak_memory_stats(device)
+    
+    # 2. Crear un tensor "falso" simulando un parche de tu imagen 3D
+    # Formato: (Batch, Channels, Depth, Height, Width)
+    dummy_input = torch.randn((batch_size, in_channels, *roi_size), device=device)
+    
+    # Pasar el modelo a GPU y ponerlo en modo entrenamiento
+    net.to(device)
+    net.train()
+    
+    peak_memory_gb = 0.0
+    
+    try:
+        # --- 3. FORWARD PASS (Genera los mapas de activaciones) ---
+        output = net.forward(dummy_input)
+        
+        # Creamos una "falsa pérdida" solo para poder calcular gradientes
+        # Usamos .sum() para que genere un escalar
+        dummy_loss = output.sum()
+        
+        # --- 4. BACKWARD PASS (Calcula gradientes - ¡El pico de memoria ocurre aquí!) ---
+        dummy_loss.backward()
+        
+        # 5. Obtener el pico máximo de memoria que se alcanzó en la GPU
+        peak_memory_bytes = torch.cuda.max_memory_allocated(device)
+        peak_memory_gb = peak_memory_bytes / (1024 ** 3)
+        
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower():
+            print("\n\t[!] OOM: ¡El modelo requiere más VRAM de la disponible para entrenar!")
+            peak_memory_gb = float('inf')
+        else:
+            raise e
+            
+    finally:
+        # 6. Limpieza extrema: Borrar tensores, sacar el modelo de GPU y vaciar caché
+        if 'dummy_input' in locals(): del dummy_input
+        if 'output' in locals(): del output
+        if 'dummy_loss' in locals(): del dummy_loss
+        
+        net.cpu() # Devolvemos el modelo a la RAM normal
+        torch.cuda.empty_cache()
+        gc.collect()
+        
+    return peak_memory_gb
 
+def encontrar_batch_size_maximo(args, device, max_test_batch=16):
+    """
+    Sube el batch size de 1 en 1 hasta que la GPU se queda sin memoria.
+    Devuelve el último batch size que funcionó correctamente.
+    """
+    print(f"\n--- Iniciando búsqueda de Batch Size para {args.model.upper()} ---")
+    batch_size = 1
+    mejor_batch_size = 1
+    vram_segura = 0.0
+    
+    while batch_size <= max_test_batch:
+        print(f"\tProbando batch_size = {batch_size}...")
+        
+        # Instanciamos el modelo en CPU para esta prueba
+        net = Net(args)
+        
+        # Simulamos el consumo
+        vram_gb = simular_consumo_real_gb(
+            net=net, 
+            device=device, 
+            roi_size=args.roi_size,
+            in_channels=args.in_channels,
+            batch_size=batch_size
+        )
+        
+        # Limpiamos
+        del net
+        torch.cuda.empty_cache()
+        
+        # Comprobamos si petó la memoria
+        if vram_gb == float('inf'):
+            print(f"\t[!] Límite alcanzado. El modelo no soporta batch_size = {batch_size}")
+            break
+        else:
+            print(f"\t[OK] Soporta batch_size = {batch_size} (VRAM Peak: {vram_gb:.2f} GB)")
+            mejor_batch_size = batch_size
+            vram_segura = vram_gb
+            batch_size += 1  # Incrementamos para la siguiente prueba
+            
+    print(f"-> BATCH SIZE MÁXIMO SEGURO: {mejor_batch_size} (Consumiendo {vram_segura:.2f} GB)")
+    return mejor_batch_size
 
 class MainModule:
     """Class that defines the main module that will be used to train, test and predict with different medical models.
     """    
+    def __init__(self, args):
+        self.models = ['segformer',
+                       'swin_unetr',
+                       'unet',
+                       'unetr',
+                       'unetrpp',
+                       'unetpp',
+                       'uxlstm_bot',
+                       'attention_unet'
+                    ]
+        self.args = args
 
-    def __call__(self, args):
+    def __call__(self):
         """Call method that will be used to train, test and predict with different medical models.
 
         Args:
@@ -327,239 +423,31 @@ class MainModule:
         print("Number of GPUs available: {}. Device used: {}".format(num_of_gpus, device))
         logging.basicConfig(level=logging.INFO)
 
-        # root_dir = '.'
-        root_dir = '/mnt/lustre/scratch/nlsas/home/usc/lc/avr/models' # use this in CESGA
-        log_dir = os.path.join(root_dir, 'logs', args.dataset, args.model, args.dimension)
-        #log_dir = os.path.join(root_dir, 'logs_3' ) ## TODO  CHANGE 
+        for model in self.models:
+            self.args.model = model
+            config_path = 'config/%s/%s_%s.yaml'%(self.args.dataset, self.args.model, self.args.dimension)
 
-        if args.mode == "Train":
-            self.train(args, log_dir)
+            if not os.path.exists(config_path):
+                raise ValueError("The specified configuration doesn't exist: %s"%config_path)
 
-        elif args.mode == "Test":   
-            self.test(args, log_dir, device, root_dir=root_dir)
+            print('Loading configurations from %s'%config_path)
 
-        elif args.mode == "Predict":
-            self.predict(args, log_dir, device, root_dir=root_dir)
+            with open(config_path, 'r') as f:
+                config = yaml.load(f, Loader=yaml.SafeLoader)
 
-        else:
-            try:
-                raise ValueError("Invalid mode. Choose between Train, Test or Predict")
-            except ValueError as err:
-                print(err.args)
-        
+            for key, value in config.items():
+                setattr(args, key, value)
 
-    def train(self, args, log_dir):
-        """Function to train the model. Call the specific dataset and model, and train the model.
-
-        Args:
-            args (argparse.Namespace): Arguments from the command line.
-            log_dir (str): Log directory
-        """    
-
-        logging.info(f"Training mode")
-        print(f"[INFO] Training mode\n")
-
-        logging.info(
-            f"\nDataset: {args.dataset},\n"
-            + f"Model: {args.model},\n"
-            + f"Dimension: {args.dimension}"
-        )
-
-        logging.info(f"Creating Model")
-        net = Net(args)
-        ckpt_path = None
-        if args.trainmode == 'cont':    # only to continue on a checkpoint
-            log_dir_model = os.path.join(log_dir, 'lightning_logs')
-            ckpt_path = get_latest_run_version_ckpt_epoch_no(lightning_logs_dir=log_dir_model)
-            # net = net.load_from_checkpoint(checkpoint_path=ckpt_path)
-            print("Continue training from checkpoint: ", ckpt_path)
-
-        tb_logger = pl.loggers.TensorBoardLogger(save_dir=log_dir)
-        
-        checkpoint_callback = pl.callbacks.ModelCheckpoint(monitor='val_loss',
-                                                filename= args.model + '-{epoch:02d}-{val_loss:.2f}',
-                                                save_top_k=1, mode='min', save_last=True)
-
-        logging.info(f"Preparing trainer")
-
-        early_stop_callback = EarlyStopping(
-            monitor='val_loss',
-            min_delta=0.00,
-            patience=10,
-            verbose=True,
-            mode='min'
-        )
-        
-        trainer = pl.Trainer(
-            accelerator="gpu",
-            accumulate_grad_batches=args.accumulate_grad_batches, 
-            devices=[0],
-            max_epochs=args.max_epochs, # Set 100 top check if the fault is caused by the args.max_epochs
-            logger=tb_logger,
-            enable_checkpointing=True,
-            num_sanity_val_steps=1,
-            log_every_n_steps= 1,
-            callbacks=[checkpoint_callback, early_stop_callback],
-            precision= '16-mixed'
-        )
-
-        logging.info(f"Preparing Dataset")
-        dataset = get_dataset(args)
-        logging.info(f"Created Dataset and Trainer")
-
-        #configure_logger(0, log_dir+f"/fold.txt")
-
-        logging.info(f"Start training")
-        start = datetime.now()
-        print('Start training', start)
-        trainer.fit(net, dataset, ckpt_path=ckpt_path)
-        # if early_stop_callback.stopping_reason_message:    # to see the reason in file.out  
-        #     print(f"[Early Stopping Triggered] {early_stop_callback.stopping_reason_message}\n")
-
-        print('Training duration:', datetime.now() - start)
-        logging.info(f"Best Dice: {net.best_val_dice:.4f} in epoch {net.best_val_epoch}")
-
-        logging.info(f"Start evaluation")
-        trainer.test(net, dataloaders=dataset)
-        logging.info(f"Evaluation Done")
-        logging.info(f"Dice: {net.best_val_dice:.4f}")
-
-
-    def test(self, args, log_dir, device, root_dir="."):
-        """Function to test the model. Call the specific dataset and model, and test the model.
-
-        Args:
-            args (argparse.Namespace): Arguments from the command line.
-            log_dir (str): Log directory
-            device (torch.device): Device to be used
-            root_dir (str, optional): Root path dir. Defaults to ".".
-        """        
-        logging.info(f"Test mode")
-        print(f"[INFO] Test mode\n")
-
-        logging.info(
-            f"\nDataset: {args.dataset},\n"
-            + f"Model: {args.model},\n"
-            + f"Dimension: {args.dimension}"
-        )
-
-        logging.info(f"Loading Model")
-        net = Net(args)
-        log_dir = os.path.join(log_dir, 'lightning_logs')
-        ckpt_path = get_latest_run_version_ckpt_epoch_no(
-            lightning_logs_dir=log_dir
-            # run_version=args.run_version
+            torch.cuda.empty_cache()
+            net = Net(self.args)
+            batch_maximo = encontrar_batch_size_maximo(
+                args=self.args, 
+                device=device,
+                max_test_batch=10e6  # Ponemos un límite de 8 para no eternizar la prueba
             )
-        ckpt_model = Net.load_from_checkpoint(checkpoint_path=ckpt_path)
-        dataset = get_dataset(args=args)
-        ## TODO: Implement our metrics
-        trainer = pl.Trainer(
-            accelerator="gpu" if torch.cuda.is_available() else "cpu", 
-            devices=[0] if torch.cuda.is_available() else None,
-            logger=False
-        )
-        logging.info(f"Starting test evaluation...")
-        trainer.test(model=ckpt_model, datamodule=dataset)
-        
-        logging.info(f"Test Evaluation Done!")
             
-
-    def predict(self, args, log_dir, device, root_dir="."):
-        """Function to predict with the model. Call the specific dataset and model, and predict with the model.
-
-        Args:
-            args (argparse.Namespace): Arguments from the command line.
-            log_dir (str): Log directory
-            device (torch.device): Device to be used
-            root_dir (str, optional): Root path dir. Defaults to ".".
-        """        
-        logging.info(f"Predict mode")
-        print(f"[INFO] Predict mode\n")
-
-        logging.info(
-            f"\nDataset: {args.dataset},\n"
-            + f"Model: {args.model},\n"
-            + f"Dimension: {args.dimension}"
-        )
-
-        logging.info(f"Loading Model")
-        net = Net(args)
-        log_dir = os.path.join(log_dir, 'lightning_logs')
-        ckpt_path = get_latest_run_version_ckpt_epoch_no(
-            lightning_logs_dir=log_dir
-            )
-        ckpt_model = Net.load_from_checkpoint(checkpoint_path=ckpt_path)
-
-        dataset = get_dataset(args)
-        pred_transforms, post_transform = dataset.get_preprocessing_transform_pred()
-
-        # Load the data
-        pred_files = dataset.load_images_prediction()
-
-        pred_ds = CacheDataset(
-            data=pred_files, 
-            transform=pred_transforms,
-            cache_rate=1.0, 
-            num_workers=args.num_workers,
-        )
-        
-        pred_loader = torch.utils.data.DataLoader(
-            pred_ds, 
-            batch_size=args.inference_batch_size, 
-            num_workers=args.num_workers,
-            collate_fn=list_data_collate,)
-
-        ckpt_model.freeze()
-        ckpt_model.eval()
-        ckpt_model.to(device)
-
-        with torch.no_grad():
-            for i, pred_data in enumerate(pred_loader):
-
-                pred_outputs = sliding_window_inference(
-                    pred_data[net.keys[0]].to(device),  
-                    args.roi_size, 
-                    args.inference_batch_size, 
-                    ckpt_model, 
-                    overlap=0.8
-                )
-
-                best_pred = torch.argmax(pred_outputs, dim=1).detach().cpu()[0, ...]
-
-                best_pred_reshape = post_transform.inverse(
-                    {net.keys[0]: best_pred.unsqueeze(0)} 
-                    )
-                
-                name = os.path.split(
-                    pred_files[i][net.keys[0]]
-                    )[-1].split('.')[0]
-                
-                sample_stack(
-                    pred_data[net.keys[0]][0, 0, ...], 
-                    title=name, 
-                    show= args.show,
-                    path_out_images=args.path_prediction+args.model+"_"+args.dimension+"/"
-                    )
-                sample_stack(
-                    best_pred_reshape[net.keys[0]].squeeze(),
-                    #best_pred,
-                    title=name + "_Pred", 
-                    map="plasma", 
-                    show= args.show,
-                    path_out_images=args.path_prediction+args.model+"_"+args.dimension+"/"
-                    )
-                
-                out_dir = args.path_prediction+args.model+"_"+args.dimension+"/"
-                os.makedirs(out_dir, exist_ok=True)
-        
-                pred_numpy = best_pred_reshape[net.keys[0]].squeeze().cpu().numpy()
-                save_path = os.path.join(out_dir, name + "_Pred.npy")
-                np.save(save_path, pred_numpy)
-                
-                #TODO CHANGE
-                #if i == 1:
-                #    break
-
+            # Borramos el modelo de la RAM
+            del net
 
 
 def get_parser():
@@ -599,22 +487,8 @@ def get_parser():
     parser.add_argument('--path_prediction', type=str, default="./results/", help="Path to save the predictions")
 
     parser.add_argument('--gpu', type=str, default='0')
-    parser.add_argument("--accumulate_grad_batches", default=24, type=int, help="Número de batches a acumular")
 
     args = parser.parse_args()
-
-    
-    config_path = 'config/%s/%s_%s.yaml'%(args.dataset, args.model, args.dimension)
-    if not os.path.exists(config_path):
-        raise ValueError("The specified configuration doesn't exist: %s"%config_path)
-
-    print('Loading configurations from %s'%config_path)
-
-    with open(config_path, 'r') as f:
-        config = yaml.load(f, Loader=yaml.SafeLoader)
-
-    for key, value in config.items():
-        setattr(args, key, value)
     
 
     return args
@@ -630,4 +504,5 @@ if __name__ == "__main__":
     
     args = get_parser()
 
-    MainModule()(args)
+    module = MainModule(args)
+    module()

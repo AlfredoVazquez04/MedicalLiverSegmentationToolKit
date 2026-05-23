@@ -11,23 +11,38 @@ from classMetrics import (
 )
 
 class ShowMetrics:
+
     models_3d = [
+        'segformer',
+        'swin_unetr',
+        'unet',
+        'unetr',
+        'unetpp',
+        'unetrpp',
+        'uxlstm',
+        'attention_unet'
+    ]
+
+    
+    models_2d = [
+        'unet',
+        'segformer',
         'attention_unet',
-        'medformer', 
-        'resunet', 
-        'swin_unetr', 
-        'unet++', 
-        'unetr', 
-        'vnet', 
-        'segformer'
+        'swin_unetr',
+        'unetr',
+        'unetpp',
+        'uxlstm_bot',
+        'unetrpp'
     ]
 
     file_name = './metrics.json'
 
-    all_classes = [ '__BKG__','Spleen','Right Kidney','Left Kidney','Gallbladder',
-                'Esophagus','Liver', 'Stomach','Aorta','IVC','Portal and Splenic Veins',
-                'Pancreas','Right adrenal gland','Left adrenal gland']
-
+    all_classes = [
+        'Background', 'Spleen', 'Right Kidney', 'Left Kidney', 'Gallbladder', 
+        'Esophagus', 'Liver', 'Stomach', 'Aorta', 'IVC', 'Pancreas', 
+        'Right Adrenal', 'Left Adrenal', 'Duodenum', 'Bladder', 'Prostate/Uterus'
+    ]
+    
     all_metrics = MetricResult.metrics
 
     range_metrics = MetricResult.range_metrics

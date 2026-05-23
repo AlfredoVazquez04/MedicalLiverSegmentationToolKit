@@ -11,3 +11,6 @@ from .fcn_net import FCN_Net
 from .segformer import SegFormer3D
 from .sam import sam_model_registry3D
 from .dints import DiNTS, TopologyInstance, TopologySearch
+from .uxLSTM import UXlstmBot
+from .unetrpp import UNETR_PP
+# Faltaría segmamba y nnmamba

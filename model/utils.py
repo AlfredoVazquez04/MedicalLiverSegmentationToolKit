@@ -185,7 +185,7 @@ def get_model(args, pretrain=False):
                 aux_loss=args.aux_loss
                 )
     
-        elif args.model == 'unet++':
+        elif args.model == 'unetpp':
             from .dim3 import UNetPlusPlus
             return UNetPlusPlus(
                 args.in_chan, 
@@ -230,15 +230,62 @@ def get_model(args, pretrain=False):
                 args.classes, 
                 )
         
-    elif args.dimension == '2d':
-        if args.model == 'unet':                # check it
-            from .dim2 import UNet
-            return UNet(
-                args.in_chan,
-                args.classes
+        elif args.model == 'uxlstm':
+            from .dim3 import UXlstmBot
+            from dynamic_network_architectures.building_blocks.helper import get_matching_instancenorm, convert_dim_to_conv_op
+            conv_op = convert_dim_to_conv_op(args.spatial_dims)
+            
+            return UXlstmBot(
+                input_channels=args.in_channels,
+                n_stages=args.n_stages,
+                features_per_stage=args.features_per_stage,
+                conv_op=conv_op,
+                kernel_sizes=args.kernel_sizes,
+                strides=args.strides,
+                n_conv_per_stage=args.n_conv_per_stage,
+                num_classes=args.out_channels, 
+                n_conv_per_stage_decoder=args.n_conv_per_stage_decoder,
+                conv_bias=True, 
+                norm_op=get_matching_instancenorm(conv_op),
+                norm_op_kwargs={'eps': 1e-5, 'affine': True},
+                dropout_op=None, 
+                dropout_op_kwargs=None,
+                nonlin=torch.nn.LeakyReLU, 
+                nonlin_kwargs={'inplace': True},
+                deep_supervision=False 
             )
         
-        elif args.model == "segformer":         # check it
+        elif args.model == 'unetrpp':
+            from .dim3 import UNETR_PP
+            conv_op = nn.Conv3d if args.spatial_dims == 3 else nn.Conv2d
+            
+            return UNETR_PP(
+                in_channels=args.in_channels,
+                out_channels=args.classes,  
+                feature_size=args.feature_size,
+                hidden_size=args.hidden_size,
+                num_heads=args.num_heads,
+                pos_embed=args.pos_embed,
+                norm_name=args.norm_name,
+                dropout_rate=args.dropout_rate,
+                depths=args.depths,
+                dims=args.dims,
+                conv_op=conv_op,
+                do_ds=args.do_ds
+            )
+        
+    elif args.dimension == '2d':
+        if args.model == 'unet':                # completed
+            from .dim2 import BasicUNet
+            return BasicUNet(
+                spatial_dims=args.spatial_dims,
+                in_channels=args.in_chan, 
+                out_channels=args.classes,                
+                features=args.features,
+                dropout=args.dropout
+            )
+        
+        elif args.model == "segformer":         # completed
             from .dim2 import SegFormer     
             return SegFormer(
                 args.in_chan,
@@ -248,7 +295,7 @@ def get_model(args, pretrain=False):
         
 
         # TODO: add swin_unetr
-        elif args.model == "swin_unetr":
+        elif args.model == "swin_unetr":       # completed     
             from .dim2 import SwinUNETR
             return SwinUNETR(
                 spatial_dims=args.spatial_dims,
@@ -292,7 +339,7 @@ def get_model(args, pretrain=False):
             )
         
         # TODO: add attention_unet
-        elif args.model == "attention_unet":
+        elif args.model == "attention_unet":        # completed
             from .dim2 import AttentionUnet
             return AttentionUnet(
                 spatial_dims=args.spatial_dims,
@@ -305,7 +352,7 @@ def get_model(args, pretrain=False):
         ##################################
         # That are bleeding-edge research models.
         # TODO: add unetr++
-        elif args.model == "unetrpp":
+        elif args.model == "unetrpp":                   # completed
             from .dim2 import UNETR_PP
             return UNETR_PP(
                 in_channels=args.in_channels,
@@ -323,7 +370,7 @@ def get_model(args, pretrain=False):
             )
 
         # TODO: add uxlstm
-        elif args.model == "uxlstm_bot":
+        elif args.model == "uxlstm_bot":                # completed 
             from .dim2 import UXlstmBot
             conv_op = nn.Conv2d if args.spatial_dims == 2 else nn.Conv3d
             norm_op = nn.InstanceNorm2d if args.spatial_dims == 2 else nn.InstanceNorm3d

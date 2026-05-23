@@ -41,37 +41,37 @@ class TransformerBlock(nn.Module):
 
         self.norm = nn.LayerNorm(hidden_size)
         self.gamma = nn.Parameter(1e-6 * torch.ones(hidden_size), requires_grad=True)
-        self.epa_block = EPA(input_size=input_size, hidden_size=hidden_size, proj_size=proj_size, num_heads=num_heads, channel_attn_drop=dropout_rate,spatial_attn_drop=dropout_rate)
-        self.conv51 = UnetResBlock(2, hidden_size, hidden_size, kernel_size=3, stride=1, norm_name="batch")
-        self.conv8 = nn.Sequential(nn.Dropout2d(0.1, False), nn.Conv2d(hidden_size, hidden_size, 1))
-        
+        self.epa_block = EPA(input_size=input_size, hidden_size=hidden_size, proj_size=proj_size, num_heads=num_heads,
+                             channel_attn_drop=dropout_rate,spatial_attn_drop=dropout_rate)
+        self.conv51 = UnetResBlock(3, hidden_size, hidden_size, kernel_size=3, stride=1, norm_name="batch")
+        self.conv52 = UnetResBlock(3, hidden_size, hidden_size, kernel_size=3, stride=1, norm_name="batch")
+        self.conv8 = nn.Sequential(nn.Dropout3d(0.1, False), nn.Conv3d(hidden_size, hidden_size, 1))
+
         self.pos_embed = None
         if pos_embed:
             self.pos_embed = nn.Parameter(torch.zeros(1, input_size, hidden_size))
 
     def forward(self, x):
-        B, C, H, W = x.shape
+        B, C, H, W, D = x.shape
 
-        x = x.reshape(B, C, H * W).permute(0, 2, 1)
+        x = x.reshape(B, C, H * W * D).permute(0, 2, 1)
 
         if self.pos_embed is not None:
             x = x + self.pos_embed
         attn = x + self.gamma * self.epa_block(self.norm(x))
 
-        attn_skip = attn.reshape(B, H, W, C).permute(0, 3, 1, 2)  # (B, C, H, W)
+        attn_skip = attn.reshape(B, H, W, D, C).permute(0, 4, 1, 2, 3)  # (B, C, H, W, D)
         attn = self.conv51(attn_skip)
+        attn = self.conv52(attn)
         x = attn_skip + self.conv8(attn)
-
         return x
-
 
 class EPA(nn.Module):
     """
         Efficient Paired Attention Block, based on: "Shaker et al.,
         UNETR++: Delving into Efficient and Accurate 3D Medical Image Segmentation"
         """
-    def __init__(self, input_size, hidden_size, proj_size, num_heads=4, qkv_bias=False,
-                 channel_attn_drop=0.1, spatial_attn_drop=0.1):
+    def __init__(self, input_size, hidden_size, proj_size, num_heads=4, qkv_bias=False, channel_attn_drop=0.1, spatial_attn_drop=0.1):
         super().__init__()
         self.num_heads = num_heads
         self.temperature = nn.Parameter(torch.ones(num_heads, 1, 1))
@@ -80,9 +80,9 @@ class EPA(nn.Module):
         # qkvv are 4 linear layers (query_shared, key_shared, value_spatial, value_channel)
         self.qkvv = nn.Linear(hidden_size, hidden_size * 4, bias=qkv_bias)
 
-        # E and F are projection matrices with shared weights used in spatial attention module to project
-        # keys and values from HWD-dimension to P-dimension
-        self.E = self.F = nn.Linear(input_size, proj_size)
+        # E and F are projection matrices used in spatial attention module to project keys and values from HWD-dimension to P-dimension
+        self.E = nn.Linear(input_size, proj_size)
+        self.F = nn.Linear(input_size, proj_size)
 
         self.attn_drop = nn.Dropout(channel_attn_drop)
         self.attn_drop_2 = nn.Dropout(spatial_attn_drop)

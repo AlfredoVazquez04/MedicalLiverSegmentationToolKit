@@ -654,9 +654,11 @@ if "__main__" == __name__:
     pred_path = "../results/swin_unetr_3d/img0061_Pred.nii.gz"
 
     # Classes
-    organs = [ '__BKG__','Spleen','Right Kidney','Left Kideny','Gallbladder',
-                'Esophagus','Liver', 'Stomach','Aorta','IVC','Portal and Splenic Veins',
-                'Pancreas','Right adrenal gland','Left adrenal gland']
+    organs = [
+        'Background', 'Spleen', 'Right Kidney', 'Left Kidney', 'Gallbladder', 
+        'Esophagus', 'Liver', 'Stomach', 'Aorta', 'IVC', 'Pancreas', 
+        'Right Adrenal', 'Left Adrenal', 'Duodenum', 'Bladder', 'Prostate/Uterus'
+    ]
 
 
     metrics = RemovirtMetrics(organs)
